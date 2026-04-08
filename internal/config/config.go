@@ -34,7 +34,7 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		RedisAddr: getEnv("REDIS_ADDR", "loacalhost:6379"),
+		RedisAddr: getEnv("REDIS_ADDR", "localhost:6379"),
 		RedisPass: getEnv("REDIS_PASS", ""),
 		QueueName: getEnv("QUEUE_NAME", "task_queue"),
 		WorkerCount: getEnvInt("WORKER_COUNT", 5),
