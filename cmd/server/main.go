@@ -4,84 +4,68 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/diggiex47/distributed-task-queue/internal/api"
 	"github.com/diggiex47/distributed-task-queue/internal/config"
-	"github.com/diggiex47/distributed-task-queue/internal/job"
 	"github.com/diggiex47/distributed-task-queue/internal/redisstore"
 	"github.com/diggiex47/distributed-task-queue/internal/worker"
 )
 
-
-
 func main() {
-
-	//load config and connect to redis
+	// 1. Load Config
 	cfg := config.Load()
-	store, err:= redisstore.New(cfg.RedisAddr, cfg.RedisPass, cfg.QueueName)
+
+	// 2. Connect to redis
+	store, err := redisstore.New(cfg.RedisAddr, cfg.RedisPass, cfg.QueueName)
 	if err != nil {
-		 log.Fatalf("Failed to connect to redis : %v", err)
+		log.Fatalf("failed to connect to Redis: %v", err)
 	}
-
 	defer store.Close()
-	fmt.Println("connected to redis")
+	log.Println("Connected to Redis")
 
-	// create a cancellable context.
-	// when we call cancel(), ecery worker goroutine will see it and exit cleanly after finishing its current job.
+	// 3 Create cance;llable context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// start the worker pool - this lanches 5 goroutines immediately, all them blocking BRPOP, waiting for jobs to appear
+	// 4 start worker pool
 	pool := worker.New(store, cfg.WorkerCount)
 	pool.Start(ctx)
 
-	//give worker a moment to start up and log their "ready" messages 
-	time.Sleep(500 * time.Millisecond)
+	// 5 set up HTTP server
+	mux := http.NewServeMux()
+	handler := api.New(store)
+	handler.RegisterRoutes(mux)
 
-
-	// push 5 jobs into the queue - watch the worker race to grab them 
-	fmt.Println("\n --- pushing 5 jobs into the queue ---")
-	for i := 1; i<= 5; i++ {
-		now := time.Now()
-		j := &job.Job {
-			ID:         fmt.Sprintf("job-%d", i),
-			Status:     job.StatusPending,
-			Payload:    fmt.Sprintf("task-number-%d", i),
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-
-		if err := store.EnqueueJob(ctx, j); err != nil {
-			log.Printf("failed to enqueue job %d: %v", i, err)
-			continue		
-		}
-		fmt.Printf("Enqueued: %s\n", j.ID)
+	server := &http.Server{
+		Addr:         fmt.Sprintf(":%s", cfg.APIPort),
+		Handler:      mux,
+		ReadTimeout:  20 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
 
-
-	// wait for all jobs to be processed
-	// each job tadkles 3 seconds. with 5 workers running in parallel,
-	// all 5 jobvs should complere in ~2 seconds total - not 10 sec
-	// that the power of concurrent processing.
-	fmt.Println("\n --- waiting for worker to process all jobs ---")
-	time.Sleep(5 * time.Second)
-
-	// check the final status of every job 
-	fmt.Println("\n --- final job status ---")
-	for i := 1; i <= 5; i++ {
-		jobID := fmt.Sprintf("job-%d", i)
-		j, err := store.GetJob(ctx, jobID)
-		if err != nil || j == nil {
-			fmt.Printf("%s: not found\n", jobID)
-			continue
+	// send HTTP server in its and it's sort of tough own goroutine - ListenAndServe blocks
+	// so running it in agoroutine lets the rest of main() continue
+	go func() {
+		log.Printf("API server listening on: %s", cfg.APIPort)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
 		}
-		fmt.Printf("%s -> status: %s | result : %s\n", j.ID , j.Status, j.Result)
-	}
+	}()
 
+	// 6 wait for ctrl+c or docker stop signal
+	// This Blocks until you press ctrl+c
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("shutdown signal received..")
 
-	// signal all worker to stop and wait for them to finish cleanly
-	fmt.Println("\n --- shutting down worker ---")
-	cancel()      // send stop signal to all worker goroutines 
-	pool.Wait()   // block until every goroutine has exited
-	fmt.Println("All worker stopped. shutdown complete.")
-
+	// 7. Graceful shutdown
+	cancel()    // stop all worker
+	pool.Wait() // wait for worker to finish current jobs
+	log.Println("all worker stopped. shutdown complete")
 }
