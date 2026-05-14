@@ -19,6 +19,28 @@ Client → REST API → Redis Queue → Worker Pool → Redis Result Store
 
 ---
 
+## API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | /jobs | Submit a new job |
+| GET | /jobs/{id} | Check job status |
+| GET | /health | Health check |
+
+### Submit a Job
+```bash
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"payload": "your-task-here"}'
+```
+
+### Check Job Status
+```bash
+curl http://localhost:8080/jobs/{id}
+```
+
+---
+
 ## Tech Stack
 
 | Technology | Role |
@@ -37,22 +59,29 @@ Client → REST API → Redis Queue → Worker Pool → Redis Result Store
 | Config Layer | ✅ Complete |
 | Redis Store | ✅ Complete |
 | Worker Pool | ✅ Complete |
-| REST API | 🚧 In Progress |
-| Main + Graceful Shutdown | ⏳ Pending |
+| REST API | ✅ Complete |
+| Graceful Shutdown | 🚧 In Progress |
 | Docker + Compose | ⏳ Pending |
 
 ---
 
 ## How To Run
 
-*Full instructions coming after Docker phase is complete.*
+```bash
+# Start Redis
+docker start redis-local
+
+# Run the server
+go run ./cmd/server/main.go
+```
 
 ---
 
 ## Interview Talking Points
 
-- Producer-Consumer pattern decouples job submission from job processing
+- Producer-Consumer pattern decouples job submission from processing
 - BRPOP provides zero-CPU blocking — workers sleep until work arrives
 - Goroutines cost ~2KB vs ~1MB for OS threads — enables high concurrency
 - Repository pattern isolates all Redis logic in one place
+- 202 Accepted response signals async processing to clients
 - Graceful shutdown via context cancellation ensures no job is lost on exit

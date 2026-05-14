@@ -48,7 +48,7 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 	}
 
-	// send HTTP server in its and it's sort of tough own goroutine - ListenAndServe blocks
+	// send HTTP server in its and it's sort of tough cown goroutine - ListenAndServe blocks
 	// so running it in agoroutine lets the rest of main() continue
 	go func() {
 		log.Printf("API server listening on: %s", cfg.APIPort)
