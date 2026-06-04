@@ -129,7 +129,7 @@ All while remaining decoupled — no worker talks to the API, no API talks to wo
 
 ---
 
-## Interview Talking Points
+## Talking Points
 
 **Architecture & Design**
 - Producer-Consumer pattern decouples job submission from processing
