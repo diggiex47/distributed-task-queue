@@ -28,7 +28,9 @@ func main() {
 	defer store.Close()
 	log.Println("Connected to Redis")
 
-	// 3 Create cance;llable context for graceful shutdown
+	// 3 Create cancellable context for graceful shutdown
+	// this is the master switch for the entire system.
+	// Calling cancel() sends a stop signal to ecery goroutines watching ctx.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -44,12 +46,13 @@ func main() {
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%s", cfg.APIPort),
 		Handler:      mux,
-		ReadTimeout:  20 * time.Second,
+		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	// send HTTP server in its and it's sort of tough cown goroutine - ListenAndServe blocks
-	// so running it in agoroutine lets the rest of main() continue
+	// so running it in agoroutine lets the rest of main() continue to the shutdown logic below.
 	go func() {
 		log.Printf("API server listening on: %s", cfg.APIPort)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -58,14 +61,40 @@ func main() {
 	}()
 
 	// 6 wait for ctrl+c or docker stop signal
-	// This Blocks until you press ctrl+c
+	// make(chan os.Signal, 1) creates a channel that carries OS signal
+	// signal.Notify twlls Go: "when you receive SIGINT or SIGTERM, send it to the quit channel instead of killing the program"
+	// SIGINT = ctrl+c 
+	// SIGTERM = docker stop 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	log.Println("shutdown signal received..")
+
+
+	sig := <-quit // Blocks here until a signal arrivves
+	log.Println("shutdown signal received..", sig)
+
+
 
 	// 7. Graceful shutdown
-	cancel()    // stop all worker
-	pool.Wait() // wait for worker to finish current jobs
-	log.Println("all worker stopped. shutdown complete")
+	// step 1: stop the HTTP sercer gracefullly.
+	// no new request will be accepted. existing requests get 30 sec
+	// to complete beffore being forcefully closed
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer shutdownCancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server forced to close: %v", err)
+	}
+	log.Println("HTTP server stopped")
+
+	// step 2: signal all worker to stop.
+	//cabncel() close the ctx.Donr() channel, which every worker is watching.
+	// Their BRPOP calls return immediately.
+	cancel()
+	log.Println("waiting for the worker to finish current job...")
+
+	//step 3: wiat fot every worker to finish its current job.
+	// pool.Wait() blocks until the WaitGroup counter reaches zero.
+	// no worker will be kulled nid-task.
+	pool.Wait()
+	log.Println("all workers stopped. exiting.")
 }
